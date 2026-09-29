@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ccpay-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-credit_card_db}
+      MYSQL_USER: ${MYSQL_USER:-ccpay_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ccpay_password}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ccpay-network
+
+  django:
+    build:
+      context: ./django-backend
+      dockerfile: Dockerfile
+    container_name: ccpay-django
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./django-backend:/app
+    networks:
+      - ccpay-network
+
+  fastapi:
+    build:
+      context: ./fastapi-backend
+      dockerfile: Dockerfile
+    container_name: ccpay-fastapi
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FASTAPI_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-ccpay_user}:${MYSQL_PASSWORD:-ccpay_password}@mysql:3306/${MYSQL_DATABASE:-credit_card_db}
+    ports:
+      - "8001:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      django:
+        condition: service_started
+    volumes:
+      - ./fastapi-backend:/app
+    networks:
+      - ccpay-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ccpay-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api
+      VITE_PAYMENT_API_BASE_URL: http://localhost:8001/api
+    ports:
+      - "5173:5173"
+    depends_on:
+      - django
+      - fastapi
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - ccpay-network
+
+volumes:
+  mysql-data:
+
+networks:
+  ccpay-network:
+    driver: bridge
